@@ -869,8 +869,8 @@ _MODE_OPTIONS = [
 ]
 
 _SCOPE_OPTIONS = [
-    (SCOPE_NAMES_ONLY, "Nur Namen", "Vor- und Nachnamen"),
-    (SCOPE_ALL, "Alles Relevante", "Alle Kategorien"),
+    (SCOPE_NAMES_ONLY, "Personen-Daten", "Namen, Adressen, Städte, E-Mail, Telefon"),
+    (SCOPE_ALL, "Alles + Zahlen", "Zusätzlich Beträge, Summen, Prozente, IBANs"),
 ]
 
 

@@ -27,11 +27,15 @@ INTENSITY_HARD = "hard"         # aggressive – in doubt, always redact
 # Scope  (which categories of PII to target)
 # ---------------------------------------------------------------------------
 
-SCOPE_NAMES_ONLY = "names_only"  # only VORNAME, NACHNAME, UNTERSCHRIFT
-SCOPE_ALL = "all"                # all 20 categories
+SCOPE_NAMES_ONLY = "names_only"  # person-identifying: names, addresses, contact
+SCOPE_ALL = "all"                # above + financial numbers, amounts, percentages
 
-# Categories that belong to "names only" scope
-_NAMES_CATEGORIES = {"VORNAME", "NACHNAME", "UNTERSCHRIFT"}
+# Categories for "Personen-Daten" scope (everything that identifies a person)
+_PERSON_CATEGORIES = {
+    "VORNAME", "NACHNAME", "STRASSE", "HAUSNUMMER", "STADT", "PLZ", "LAND",
+    "EMAIL", "TELEFON", "UNTERNEHMEN", "GEBURTSDATUM", "UNTERSCHRIFT",
+    "SOZIALVERSICHERUNG", "AUSWEISNUMMER", "GRUNDSTUECK",
+}
 
 # Approximate character limit per chunk.  Most models handle ~120k chars
 # comfortably; we stay well below to leave room for the system prompt and
@@ -136,9 +140,13 @@ _INTENSITY_PREFIX = {
 }
 
 _SCOPE_NAMES_INSTRUCTION = (
-    "EINSCHRÄNKUNG DES UMFANGS: Suche AUSSCHLIESSLICH nach NAMEN von Personen. "
-    "Das bedeutet: NUR die Kategorien VORNAME, NACHNAME und UNTERSCHRIFT. "
-    "Ignoriere alle anderen Kategorien (Adressen, Nummern, Firmen, Beträge etc.) vollständig.\n\n"
+    "EINSCHRÄNKUNG DES UMFANGS: Suche nur nach PERSONEN-IDENTIFIZIERENDEN Daten. "
+    "Das bedeutet: VORNAME, NACHNAME, STRASSE, HAUSNUMMER, STADT, PLZ, LAND, "
+    "EMAIL, TELEFON, UNTERNEHMEN, GEBURTSDATUM, UNTERSCHRIFT, "
+    "SOZIALVERSICHERUNG, AUSWEISNUMMER, GRUNDSTUECK. "
+    "IGNORIERE: Geldbeträge (GELDBETRAG), Kontonummern (KONTONUMMER), "
+    "Krypto-Adressen (KRYPTO_ADRESSE), Steuernummern (STEUERNUMMER), "
+    "Aktenzeichen (AKTENZEICHEN) und alle Zahlen/Prozente/Summen.\n\n"
 )
 
 
@@ -231,9 +239,9 @@ def detect_entities_openai(
     )
     entities = _parse_ai_response(response.choices[0].message.content)
 
-    # Post-filter for names-only scope (belt and suspenders)
+    # Post-filter for person-data scope (belt and suspenders)
     if scope == SCOPE_NAMES_ONLY:
-        entities = [e for e in entities if e["category"] in _NAMES_CATEGORIES]
+        entities = [e for e in entities if e["category"] in _PERSON_CATEGORIES]
 
     return entities
 
