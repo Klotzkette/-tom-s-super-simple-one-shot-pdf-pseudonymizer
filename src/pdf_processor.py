@@ -82,15 +82,21 @@ def _image_to_pdf(img_path: str) -> str:
 
     Returns the path to a temporary PDF file.
     """
-    tmp = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
-    tmp.close()
-    img_doc = fitz.open(img_path)
-    pdf_bytes = img_doc.convert_to_pdf()
-    img_doc.close()
-    pdf_doc = fitz.open("pdf", pdf_bytes)
-    pdf_doc.save(tmp.name)
-    pdf_doc.close()
-    return tmp.name
+    try:
+        tmp = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
+        tmp.close()
+        img_doc = fitz.open(img_path)
+        pdf_bytes = img_doc.convert_to_pdf()
+        img_doc.close()
+        pdf_doc = fitz.open("pdf", pdf_bytes)
+        pdf_doc.save(tmp.name)
+        pdf_doc.close()
+        return tmp.name
+    except Exception as e:
+        raise RuntimeError(
+            f"Fehler beim Konvertieren des Bildes in PDF: {e}\n"
+            f"Stellen Sie sicher, dass die Datei ein gültiges JPG/JPEG ist."
+        )
 
 
 def _ocr_pdf(pdf_path: str) -> str:
@@ -110,8 +116,14 @@ def _ocr_pdf(pdf_path: str) -> str:
             optimize=1,
             progress_bar=False,
         )
+        return tmp.name
     except ImportError:
-        # Fallback: command-line ocrmypdf (needs tesseract installed)
+        pass  # try CLI fallback below
+    except Exception as e:
+        raise RuntimeError(f"OCR-Fehler: {e}")
+
+    # Fallback: command-line ocrmypdf (needs tesseract installed)
+    try:
         subprocess.run(
             [
                 "ocrmypdf", "--skip-text", "-l", "deu+eng",
@@ -120,7 +132,88 @@ def _ocr_pdf(pdf_path: str) -> str:
             check=True,
             timeout=300,
         )
+        return tmp.name
+    except FileNotFoundError:
+        try:
+            os.unlink(tmp.name)
+        except OSError:
+            pass
+        raise RuntimeError(
+            "OCR wird benötigt, ist aber nicht installiert.\n"
+            "Bitte installieren Sie ocrmypdf und Tesseract:\n"
+            "  • pip install ocrmypdf\n"
+            "  • Tesseract: apt install tesseract-ocr tesseract-ocr-deu"
+        )
+    except subprocess.SubprocessError as e:
+        raise RuntimeError(f"OCR-Fehler: {e}")
+
+
+def _text_to_pdf(full_text: str) -> str:
+    """Create a multi-page PDF from plain text. Returns temp file path."""
+    pdf_doc = fitz.open()
+    page_w, page_h = 595.28, 841.89
+    margin = 50
+    text_rect = fitz.Rect(margin, margin, page_w - margin, page_h - margin)
+
+    remaining = full_text
+    while remaining.strip():
+        page = pdf_doc.new_page(width=page_w, height=page_h)
+        rc = page.insert_textbox(
+            text_rect, remaining,
+            fontname="helv", fontsize=11,
+            color=(0, 0, 0),
+        )
+        if rc >= 0:
+            break  # all text fit on this page
+        char_capacity = int(len(remaining) * 0.8)
+        split_pos = remaining.rfind("\n", 0, char_capacity)
+        if split_pos <= 0:
+            split_pos = remaining.rfind(" ", 0, char_capacity)
+        if split_pos <= 0:
+            split_pos = char_capacity
+        remaining = remaining[split_pos:].lstrip()
+
+    tmp = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
+    tmp.close()
+    pdf_doc.save(tmp.name)
+    pdf_doc.close()
     return tmp.name
+
+
+def _extract_docx_text(docx_path: str) -> str:
+    """Extract text from a .docx file including paragraphs, tables,
+    headers, and footers.  Requires python-docx."""
+    from docx import Document as DocxDocument
+
+    doc = DocxDocument(docx_path)
+    parts: List[str] = []
+
+    # Headers & footers (all sections)
+    for section in doc.sections:
+        for hdr in (section.header, section.first_page_header):
+            if hdr and hdr.paragraphs:
+                for p in hdr.paragraphs:
+                    if p.text.strip():
+                        parts.append(p.text)
+        for ftr in (section.footer, section.first_page_footer):
+            if ftr and ftr.paragraphs:
+                for p in ftr.paragraphs:
+                    if p.text.strip():
+                        parts.append(p.text)
+
+    # Main body paragraphs
+    for p in doc.paragraphs:
+        if p.text.strip():
+            parts.append(p.text)
+
+    # Tables
+    for table in doc.tables:
+        for row in table.rows:
+            cells = [cell.text.strip() for cell in row.cells if cell.text.strip()]
+            if cells:
+                parts.append("  |  ".join(cells))
+
+    return "\n\n".join(parts)
 
 
 def _docx_to_pdf(docx_path: str) -> str:
@@ -129,8 +222,11 @@ def _docx_to_pdf(docx_path: str) -> str:
     Strategy:
       1. Try LibreOffice headless (best quality, preserves formatting)
       2. Fallback: extract text via python-docx and create a simple PDF
+         (only works for .docx – .doc requires LibreOffice)
     Returns the path to the resulting PDF.
     """
+    ext = os.path.splitext(docx_path)[1].lower()
+
     # --- Strategy 1: LibreOffice headless ---
     tmp_dir = tempfile.mkdtemp()
     base = os.path.splitext(os.path.basename(docx_path))[0]
@@ -152,9 +248,16 @@ def _docx_to_pdf(docx_path: str) -> str:
         except (FileNotFoundError, subprocess.SubprocessError):
             continue
 
-    # --- Strategy 2: python-docx text extraction ---
+    # --- Strategy 2: python-docx text extraction (only .docx) ---
+    if ext == ".doc":
+        raise RuntimeError(
+            "Für .doc-Dateien (altes Word-Format) wird LibreOffice benötigt.\n"
+            "Bitte installieren Sie LibreOffice, oder speichern Sie die Datei\n"
+            "als .docx und versuchen Sie es erneut."
+        )
+
     try:
-        from docx import Document as DocxDocument
+        full_text = _extract_docx_text(docx_path)
     except ImportError:
         raise RuntimeError(
             "Für die DOCX-Konvertierung wird LibreOffice oder python-docx benötigt.\n"
@@ -162,46 +265,13 @@ def _docx_to_pdf(docx_path: str) -> str:
             "  • LibreOffice (empfohlen für volle Formatierung)\n"
             "  • pip install python-docx"
         )
-
-    doc = DocxDocument(docx_path)
-    paragraphs = [p.text for p in doc.paragraphs if p.text.strip()]
-    full_text = "\n\n".join(paragraphs)
+    except Exception as e:
+        raise RuntimeError(f"Fehler beim Lesen der DOCX-Datei: {e}")
 
     if not full_text.strip():
-        raise ValueError("Das DOCX-Dokument enthält keinen erkennbaren Text.")
+        raise ValueError("Das Word-Dokument enthält keinen erkennbaren Text.")
 
-    # Build a multi-page PDF from the extracted text
-    pdf_doc = fitz.open()
-    page_w, page_h = 595.28, 841.89
-    margin = 50
-    text_rect = fitz.Rect(margin, margin, page_w - margin, page_h - margin)
-
-    # Split text into pages using fitz textbox overflow
-    remaining = full_text
-    while remaining.strip():
-        page = pdf_doc.new_page(width=page_w, height=page_h)
-        rc = page.insert_textbox(
-            text_rect, remaining,
-            fontname="helv", fontsize=11,
-            color=(0, 0, 0),
-        )
-        if rc >= 0:
-            break  # all text fit on this page
-        # rc < 0 means overflow; estimate how much fit
-        # Approximate: try to find a good split point
-        char_capacity = int(len(remaining) * 0.8)
-        split_pos = remaining.rfind("\n", 0, char_capacity)
-        if split_pos <= 0:
-            split_pos = remaining.rfind(" ", 0, char_capacity)
-        if split_pos <= 0:
-            split_pos = char_capacity
-        remaining = remaining[split_pos:].lstrip()
-
-    tmp = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
-    tmp.close()
-    pdf_doc.save(tmp.name)
-    pdf_doc.close()
-    return tmp.name
+    return _text_to_pdf(full_text)
 
 
 def prepare_input(
@@ -241,7 +311,19 @@ def prepare_input(
     if ext in (".doc", ".docx"):
         if status_callback:
             status_callback("Word-Dokument wird in PDF konvertiert …")
-        return _docx_to_pdf(input_path)
+        pdf_path = _docx_to_pdf(input_path)
+        # LibreOffice may produce image-only PDFs for some DOC files –
+        # ensure we have an extractable text layer.
+        if not _has_text_layer(pdf_path):
+            if status_callback:
+                status_callback("Konvertiertes PDF hat keinen Text – OCR wird durchgeführt …")
+            ocr_path = _ocr_pdf(pdf_path)
+            try:
+                os.unlink(pdf_path)
+            except OSError:
+                pass
+            return ocr_path
+        return pdf_path
 
     # ext == ".pdf"
     if _has_text_layer(input_path):
