@@ -665,6 +665,7 @@ class AnonymizeWorker(QThread):
 
             pdf_path = prepare_input(
                 self.input_path,
+                api_key=self.api_key,
                 status_callback=lambda msg: self.status.emit(msg),
             )
             if pdf_path != self.input_path:

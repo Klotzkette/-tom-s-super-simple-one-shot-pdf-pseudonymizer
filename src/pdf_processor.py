@@ -148,6 +148,88 @@ def _ocr_pdf(pdf_path: str) -> str:
         raise RuntimeError(f"OCR-Fehler: {e}")
 
 
+_VISION_OCR_PROMPT = """Extrahiere den VOLLSTÄNDIGEN Text aus diesem Dokument-Scan / Bild.
+
+REGELN:
+- Gib den Text EXAKT so wieder wie er im Dokument steht
+- Behalte die Struktur bei (Absätze, Aufzählungen, Einrückungen)
+- Für Tabellen: verwende | als Spalten-Trenner und neue Zeilen für Reihen
+- Überspringe KEINEN Text – auch Fußnoten, Seitenzahlen, Kopfzeilen, Briefköpfe
+- Handschriftliche Texte: versuche zu lesen, wenn unleserlich markiere als [HANDSCHRIFT]
+- Unterschriften: markiere als [UNTERSCHRIFT]
+- Ignoriere reine Grafiken/Bilder/Logos (nur Text extrahieren)
+- Gib NUR den extrahierten Text zurück, KEINE Erklärungen oder Kommentare
+- Wenn kein Text erkennbar: antworte mit [KEIN TEXT]"""
+
+
+def _gpt_vision_ocr(pdf_path: str, api_key: str,
+                     status_callback: Optional[Callable[[str], None]] = None) -> str:
+    """Use GPT-5.2 Vision to extract text from image-based PDF pages.
+
+    Renders each page as a JPEG, sends to GPT-5.2 Vision for text
+    extraction.  Much better quality than Tesseract OCR, especially for
+    handwriting, complex layouts, and multi-language documents.
+
+    Returns the path to a new text-based PDF containing the extracted text.
+    """
+    import base64
+    from openai import OpenAI
+
+    client = OpenAI(api_key=api_key)
+    doc = fitz.open(pdf_path)
+    all_text: List[str] = []
+    total = len(doc)
+
+    for idx in range(total):
+        page = doc[idx]
+        if status_callback:
+            status_callback(f"KI liest Seite {idx + 1}/{total} …")
+
+        # Render at 200 DPI for good quality
+        mat = fitz.Matrix(200.0 / 72.0, 200.0 / 72.0)
+        try:
+            pix = page.get_pixmap(matrix=mat, colorspace=fitz.csRGB)
+        except Exception:
+            all_text.append("")
+            continue
+
+        img_bytes = pix.tobytes("jpeg")
+        b64 = base64.b64encode(img_bytes).decode("utf-8")
+
+        try:
+            resp = client.chat.completions.create(
+                model="gpt-5.2",
+                messages=[{
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": _VISION_OCR_PROMPT},
+                        {"type": "image_url", "image_url": {
+                            "url": f"data:image/jpeg;base64,{b64}",
+                            "detail": "high",
+                        }},
+                    ],
+                }],
+                temperature=0.0,
+                max_completion_tokens=8192,
+            )
+            page_text = resp.choices[0].message.content.strip()
+            if page_text == "[KEIN TEXT]":
+                page_text = ""
+            all_text.append(page_text)
+        except Exception:
+            all_text.append("")
+
+    doc.close()
+    full_text = "\n\n".join(all_text)
+
+    if not full_text.strip():
+        raise ValueError(
+            "GPT-5.2 Vision konnte keinen Text im Dokument erkennen."
+        )
+
+    return _text_to_pdf(full_text)
+
+
 def _text_to_pdf(full_text: str) -> str:
     """Create a multi-page PDF from plain text. Returns temp file path."""
     pdf_doc = fitz.open()
@@ -274,14 +356,36 @@ def _docx_to_pdf(docx_path: str) -> str:
     return _text_to_pdf(full_text)
 
 
+def _do_ocr(pdf_path: str, api_key: Optional[str],
+            status_callback: Optional[Callable[[str], None]] = None) -> str:
+    """Extract text from an image-based PDF using GPT Vision (preferred)
+    or Tesseract OCR (fallback).  Returns path to a text-based temp PDF."""
+    # --- Primary: GPT-5.2 Vision ---
+    if api_key:
+        try:
+            if status_callback:
+                status_callback("KI-Texterkennung wird durchgeführt …")
+            return _gpt_vision_ocr(pdf_path, api_key, status_callback)
+        except Exception:
+            pass  # fall through to Tesseract
+
+    # --- Fallback: Tesseract OCR ---
+    if status_callback:
+        status_callback("OCR wird durchgeführt …")
+    return _ocr_pdf(pdf_path)
+
+
 def prepare_input(
     input_path: str,
+    api_key: Optional[str] = None,
     status_callback: Optional[Callable[[str], None]] = None,
 ) -> str:
     """Prepare an input file for processing.
 
     Accepts PDF, DOCX, DOC, JPG, and JPEG.
-    Converts non-PDF files to PDF and adds OCR when needed.
+    Converts non-PDF files to PDF.  For image-based content, uses
+    GPT-5.2 Vision (if *api_key* given) or Tesseract OCR as fallback
+    to extract text.
 
     Returns the path to a PDF with a text layer.
     If the returned path differs from *input_path*, it is a temporary file
@@ -299,39 +403,35 @@ def prepare_input(
         if status_callback:
             status_callback("Bild wird in PDF konvertiert …")
         pdf_path = _image_to_pdf(input_path)
-        if status_callback:
-            status_callback("OCR wird durchgeführt …")
-        ocr_path = _ocr_pdf(pdf_path)
-        try:
-            os.unlink(pdf_path)
-        except OSError:
-            pass
-        return ocr_path
+        result = _do_ocr(pdf_path, api_key, status_callback)
+        # Clean up intermediate image PDF
+        if result != pdf_path:
+            try:
+                os.unlink(pdf_path)
+            except OSError:
+                pass
+        return result
 
     if ext in (".doc", ".docx"):
         if status_callback:
             status_callback("Word-Dokument wird in PDF konvertiert …")
         pdf_path = _docx_to_pdf(input_path)
-        # LibreOffice may produce image-only PDFs for some DOC files –
-        # ensure we have an extractable text layer.
+        # Ensure we have an extractable text layer
         if not _has_text_layer(pdf_path):
-            if status_callback:
-                status_callback("Konvertiertes PDF hat keinen Text – OCR wird durchgeführt …")
-            ocr_path = _ocr_pdf(pdf_path)
-            try:
-                os.unlink(pdf_path)
-            except OSError:
-                pass
-            return ocr_path
+            result = _do_ocr(pdf_path, api_key, status_callback)
+            if result != pdf_path:
+                try:
+                    os.unlink(pdf_path)
+                except OSError:
+                    pass
+            return result
         return pdf_path
 
     # ext == ".pdf"
     if _has_text_layer(input_path):
         return input_path  # already usable
 
-    if status_callback:
-        status_callback("PDF hat keinen Text – OCR wird durchgeführt …")
-    return _ocr_pdf(input_path)
+    return _do_ocr(input_path, api_key, status_callback)
 
 
 def extract_text(pdf_path: str) -> str:
@@ -361,11 +461,15 @@ def _add_redaction(page, rect: fitz.Rect, label: str, mode: str = "pseudo_vars")
 
     The box is **widened** when the replacement text is longer than the
     original so that IBANs, dates, and long names are never squeezed.
+
+    Returns ``(final_rect, label, font_size)`` so the caller can draw
+    a visual overlay after ``apply_redactions()`` (belt-and-suspenders
+    to ensure the black fill is always visible).
     """
     if mode == "anonymize" or not label:
         # Pure anonymization or signatures: solid black, no text
         page.add_redact_annot(rect, text="", fill=BLACK)
-        return
+        return (fitz.Rect(rect), "", 0)
 
     # Target font size: match the height of the original box, capped at 11pt
     box_h = rect.height
@@ -402,6 +506,7 @@ def _add_redaction(page, rect: fitz.Rect, label: str, mode: str = "pseudo_vars")
         fill=BLACK,
         text_color=WHITE,
     )
+    return (fitz.Rect(final_rect), label, font_size)
 
 
 # ---------------------------------------------------------------------------
@@ -410,7 +515,7 @@ def _add_redaction(page, rect: fitz.Rect, label: str, mode: str = "pseudo_vars")
 
 # Bottom fraction of each page treated as the "signature zone" where
 # detection is more aggressive.
-_SIG_ZONE_FRACTION = 0.45
+_SIG_ZONE_FRACTION = 0.35
 
 # Maximum gap (pt) between drawing strokes to consider them one cluster.
 _CLUSTER_GAP = 14
@@ -727,8 +832,8 @@ def _redact_bottom_zone_scan(page):
                         dark += 1
                     total += 1
 
-            # Flag cells where > 2 % of pixels are dark (non-text marks)
-            if total > 0 and dark / total > 0.02:
+            # Flag cells where > 5 % of pixels are dark (non-text marks)
+            if total > 0 and dark / total > 0.05:
                 suspect_cells.append(cell_page_rect)
 
     if not suspect_cells:
@@ -737,7 +842,7 @@ def _redact_bottom_zone_scan(page):
     # Merge adjacent suspect cells and redact broad areas
     clusters = _cluster_rects(suspect_cells, max_gap=12)
     for merged_rect, count in clusters:
-        if count >= 2:
+        if count >= 3:
             expanded = _expand_rect(merged_rect, page.rect, _REDACT_MARGIN)
             page.add_redact_annot(expanded, text="", fill=BLACK)
 
@@ -747,7 +852,7 @@ def _redact_bottom_zone_scan(page):
 # ---------------------------------------------------------------------------
 
 # Fraction of page height treated as header/footer zone for logo detection.
-_HEADER_ZONE_FRACTION = 0.20   # top 20 % (letterheads can be tall)
+_HEADER_ZONE_FRACTION = 0.15   # top 15 %
 _FOOTER_ZONE_FRACTION = 0.12   # bottom 12 %
 
 
@@ -817,8 +922,11 @@ def _redact_logo_images(page, repeating_xrefs: set, mode: str) -> int:
             should_redact = False
 
             if in_header:
-                # ANY image in the header zone = always redact (letterhead / logo)
-                should_redact = True
+                # Only auto-redact repeating brand images or small logo-
+                # sized images in the header zone – large content images
+                # (photos, infographics) are left alone.
+                if is_repeating or (w < 250 and h < 120):
+                    should_redact = True
             elif is_repeating:
                 # Repeating image anywhere = branding
                 should_redact = True
@@ -1041,6 +1149,39 @@ def _detect_signatures_with_vision(page, api_key: str) -> List[fitz.Rect]:
     return rects
 
 
+def _draw_redaction_overlays(page, overlays: list):
+    """Draw filled rectangles and text labels over redacted areas.
+
+    Belt-and-suspenders approach: ensures redaction areas are visually
+    filled even if ``apply_redactions()`` fails to render the fill colour
+    correctly (happens on some programmatically generated PDFs, e.g.
+    from LibreOffice or ``_text_to_pdf``).
+    """
+    if not overlays:
+        return
+
+    for rect, label, font_size in overlays:
+        # Draw a solid black rectangle
+        shape = page.new_shape()
+        shape.draw_rect(rect)
+        shape.finish(fill=BLACK, color=BLACK, width=0)
+        shape.commit()
+
+        # Draw text label for pseudo modes
+        if label and font_size > 0:
+            text_w = fitz.get_text_length(label, fontname="helv", fontsize=font_size)
+            text_x = rect.x0 + max(0, (rect.width - text_w) / 2)
+            # Baseline: approximately centre the text vertically
+            text_y = rect.y0 + (rect.height + font_size * 0.7) / 2
+            page.insert_text(
+                fitz.Point(text_x, text_y),
+                label,
+                fontname="helv",
+                fontsize=font_size,
+                color=WHITE,
+            )
+
+
 def redact_pdf(
     pdf_path: str,
     output_path: str,
@@ -1071,6 +1212,12 @@ def redact_pdf(
         if progress_callback:
             progress_callback(int((page_idx / total_pages) * 100))
 
+        # Collect overlay info for every redaction on this page.
+        # After apply_redactions() we re-draw them as shapes to guarantee
+        # the black fill is always visible (fixes white-only output on
+        # some generated PDFs).
+        page_overlays: list = []
+
         for entity_text in sorted_entities:
             label, _category = entity_map[entity_text]
 
@@ -1087,7 +1234,8 @@ def redact_pdf(
                 # Tiny vertical padding (1.5pt) so descenders/ascenders
                 # never peek out of the black box.
                 r = fitz.Rect(r.x0, r.y0 - 1.5, r.x1, r.y1 + 1.5)
-                _add_redaction(page, r, label, mode)
+                info = _add_redaction(page, r, label, mode)
+                page_overlays.append(info)
 
         # Redact logos / brand images / letterheads in headers and footers
         logo_count += _redact_logo_images(page, repeating_xrefs, mode)
@@ -1106,8 +1254,30 @@ def redact_pdf(
                 expanded = _expand_rect(rect, page.rect, _REDACT_MARGIN + 5)
                 page.add_redact_annot(expanded, text="", fill=BLACK)
 
+        # Collect non-entity redaction rects (signatures, logos) from
+        # annotations so we can re-draw them as overlays too.
+        entity_keys = {(round(r.x0, 1), round(r.y0, 1),
+                        round(r.x1, 1), round(r.y1, 1))
+                       for r, _, _ in page_overlays}
+        annot = page.first_annot
+        while annot:
+            try:
+                if annot.type[0] == 12:  # PDF_ANNOT_REDACT
+                    r = fitz.Rect(annot.rect)
+                    key = (round(r.x0, 1), round(r.y0, 1),
+                           round(r.x1, 1), round(r.y1, 1))
+                    if key not in entity_keys:
+                        page_overlays.append((r, "", 0))
+                annot = annot.next
+            except Exception:
+                break
+
         # Apply all redactions for this page at once (removes underlying text)
-        page.apply_redactions()
+        page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_REMOVE)
+
+        # Re-draw every redacted area as a filled shape to guarantee
+        # visibility on all PDF types.
+        _draw_redaction_overlays(page, page_overlays)
 
     # -- Append summary page --
     _append_summary_page(doc, entity_map, mode, logo_count=logo_count)
