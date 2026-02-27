@@ -1170,11 +1170,12 @@ Antworte NUR mit JSON:
 Wenn NICHTS gefunden wird: {"signatures": []}"""
 
 
-def _detect_visuals_with_vision(page, api_key: str) -> List[fitz.Rect]:
+def _detect_visuals_with_vision(page, api_key: str) -> List[Tuple[fitz.Rect, str]]:
     """Use GPT-5.2 vision to detect signatures, logos, stamps on *page*.
 
     Renders the page as a JPEG, sends it to the vision model, and
-    returns a list of fitz.Rect bounding boxes for detected elements.
+    returns a list of ``(fitz.Rect, type_str)`` tuples.
+    *type_str* is one of: unterschrift, paraphe, logo, stempel, foto.
     """
     import base64
     import json as _json
@@ -1233,7 +1234,7 @@ def _detect_visuals_with_vision(page, api_key: str) -> List[fitz.Rect]:
         return []
 
     # Convert percentage-based bboxes to page coordinates
-    rects: List[fitz.Rect] = []
+    results: List[Tuple[fitz.Rect, str]] = []
     pw = page_rect.width
     ph = page_rect.height
     for sig in sigs:
@@ -1243,13 +1244,62 @@ def _detect_visuals_with_vision(page, api_key: str) -> List[fitz.Rect]:
             w = sig["w_pct"] / 100.0 * pw
             h = sig["h_pct"] / 100.0 * ph
             rect = fitz.Rect(x, y, x + w, y + h)
+            sig_type = sig.get("type", "unterschrift")
             # Sanity check: not too small, not the entire page
             if rect.width > 5 and rect.height > 3 and rect.width < pw * 0.9:
-                rects.append(rect)
+                results.append((rect, sig_type))
         except (KeyError, TypeError):
             continue
 
-    return rects
+    return results
+
+
+_KAPPA = 0.5522847498  # cubic Bézier approximation of a quarter-circle
+
+
+def _draw_rounded_rect(shape, rect: fitz.Rect, radius: float = 2.0):
+    """Draw a rectangle with slightly rounded corners into *shape*.
+
+    Uses cubic Bézier arcs at each corner for a smooth, professional look.
+    *radius* is clamped so it never exceeds half the box dimensions.
+    """
+    r = min(radius, rect.width / 2, rect.height / 2, 3.0)
+    if r < 0.5:
+        shape.draw_rect(rect)
+        return
+
+    x0, y0, x1, y1 = rect.x0, rect.y0, rect.x1, rect.y1
+    k = r * _KAPPA
+
+    # Build path clockwise from top-left corner
+    # Top edge
+    shape.draw_line(fitz.Point(x0 + r, y0), fitz.Point(x1 - r, y0))
+    # Top-right corner
+    shape.draw_bezier(
+        fitz.Point(x1 - r, y0),
+        fitz.Point(x1 - r + k, y0), fitz.Point(x1, y0 + r - k),
+        fitz.Point(x1, y0 + r))
+    # Right edge
+    shape.draw_line(fitz.Point(x1, y0 + r), fitz.Point(x1, y1 - r))
+    # Bottom-right corner
+    shape.draw_bezier(
+        fitz.Point(x1, y1 - r),
+        fitz.Point(x1, y1 - r + k), fitz.Point(x1 - r + k, y1),
+        fitz.Point(x1 - r, y1))
+    # Bottom edge
+    shape.draw_line(fitz.Point(x1 - r, y1), fitz.Point(x0 + r, y1))
+    # Bottom-left corner
+    shape.draw_bezier(
+        fitz.Point(x0 + r, y1),
+        fitz.Point(x0 + r - k, y1), fitz.Point(x0, y1 - r + k),
+        fitz.Point(x0, y1 - r))
+    # Left edge
+    shape.draw_line(fitz.Point(x0, y1 - r), fitz.Point(x0, y0 + r))
+    # Top-left corner
+    shape.draw_bezier(
+        fitz.Point(x0, y0 + r),
+        fitz.Point(x0, y0 + r - k), fitz.Point(x0 + r - k, y0),
+        fitz.Point(x0 + r, y0))
 
 
 def _draw_redaction_overlays(page, overlays: list, entity_map=None):
@@ -1260,16 +1310,16 @@ def _draw_redaction_overlays(page, overlays: list, entity_map=None):
     visual treatment on top, guaranteeing consistent appearance on every
     PDF type – both native text PDFs and scanned documents.
 
-    Design: pure black fill, hair-thin border, centred white label text.
+    Design: pure black fill, slightly rounded corners, centred white label.
     """
     if not overlays:
         return
 
     for rect, label, font_size, _category in overlays:
-        # ── Filled background ──
+        # ── Filled background with rounded corners ──
         shape = page.new_shape()
-        shape.draw_rect(rect)
-        shape.finish(fill=REDACT_BG, color=REDACT_STROKE, width=0.3)
+        _draw_rounded_rect(shape, rect, radius=2.0)
+        shape.finish(fill=REDACT_BG, color=REDACT_BG, width=0)
         shape.commit()
 
         # ── Text label (pseudo modes) ──
@@ -1321,6 +1371,54 @@ def _is_legal_numbering(text: str) -> bool:
     return any(p.match(t) for p in _LEGAL_PROTECT_PATTERNS)
 
 
+def _expand_entity_map(entity_map: Dict[str, Tuple[str, str]]):
+    """Derive additional PII fragments from compound entities.
+
+    Mutates *entity_map* in place.  Examples:
+    - "Sparkasse Köln-Bonn" (UNTERNEHMEN) → adds nothing extra (single brand)
+      BUT if the text also contains "Sparkasse" standalone, we want to catch it
+    - "Dr. Hans Müller" (NACHNAME) → adds "Hans Müller" if not already present
+    - "Hauptstraße 42a" → the street and number are already separate entities
+
+    The goal is to catch the same PII even when it appears in a shorter
+    or slightly different form elsewhere in the document.
+    """
+    additions: Dict[str, Tuple[str, str]] = {}
+    existing = set(entity_map.keys())
+
+    for text, (label, cat) in list(entity_map.items()):
+        words = text.split()
+
+        if cat == "UNTERNEHMEN" and len(words) >= 2:
+            # For compound company names, add significant sub-phrases.
+            # E.g. "Sparkasse Köln-Bonn" → "Sparkasse Köln-Bonn" is already
+            # there; but if text says just "Sparkasse" we need to catch it.
+            # Add each word that is >= 4 chars and not a generic legal suffix.
+            _GENERIC_SUFFIXES = {
+                "gmbh", "ag", "kg", "ohg", "gbr", "se", "eg", "ev",
+                "ltd", "inc", "llc", "co", "ug", "mbh", "e.v.", "e.u.",
+                "und", "und", "&", "der", "die", "das", "für", "von",
+            }
+            for w in words:
+                wl = w.lower().rstrip(".,;:")
+                if len(wl) >= 4 and wl not in _GENERIC_SUFFIXES and w not in existing:
+                    if not _is_legal_numbering(w):
+                        additions[w] = (label, cat)
+
+        elif cat in ("VORNAME", "NACHNAME") and len(words) >= 2:
+            # "Dr. Hans" → "Hans" should also be caught
+            for w in words:
+                wl = w.rstrip(".")
+                if (len(wl) >= 2 and w not in existing
+                        and wl.lower() not in ("dr", "prof", "herr", "frau",
+                                                "mr", "mrs", "ms", "von",
+                                                "van", "de", "zu", "di")):
+                    if not _is_legal_numbering(w):
+                        additions[w] = (label, cat)
+
+    entity_map.update(additions)
+
+
 def redact_pdf(
     pdf_path: str,
     output_path: str,
@@ -1342,6 +1440,13 @@ def redact_pdf(
 
     # Pre-scan for repeating images (likely logos / letterheads)
     repeating_xrefs = _find_repeating_image_xrefs(doc)
+
+    # ── Derive implicit PII sub-entities ──
+    # If the AI found "Sparkasse Köln-Bonn" as UNTERNEHMEN, we must also
+    # catch standalone "Sparkasse Köln-Bonn" fragments and the distinctive
+    # core words that clearly identify the same entity.  Similarly for
+    # multi-word person names: "Dr. Hans Müller" → also catch "Hans Müller".
+    _expand_entity_map(entity_map)
 
     # Sort entities by length descending so longer matches are processed first.
     # Filter out anything that looks like legal numbering / §§ references.
@@ -1395,12 +1500,12 @@ def redact_pdf(
         _detect_and_redact_signatures(page, is_scan=page_is_scan)
 
         # GPT-5.2 vision: detect signatures, logos, stamps, photos.
-        # Runs on EVERY page; first & last pages are most likely to
-        # contain logos (letterhead) and signatures (sign-off).
+        # Runs on EVERY page – catches what heuristic methods miss.
         if api_key:
-            vision_rects = _detect_visuals_with_vision(page, api_key)
-            for rect in vision_rects:
-                expanded = _safe_expand_rect(rect, page, _REDACT_MARGIN)
+            vision_hits = _detect_visuals_with_vision(page, api_key)
+            for rect, vis_type in vision_hits:
+                margin = 1.0 if vis_type == "paraphe" else _REDACT_MARGIN
+                expanded = _safe_expand_rect(rect, page, margin)
                 page.add_redact_annot(expanded, text="", fill=REDACT_BG)
 
         # Collect non-entity redaction rects (signatures, logos) from
@@ -1633,8 +1738,8 @@ def _append_summary_page(
                 chip_rect = fitz.Rect(
                     col_chip + 6, y, col_chip + 6 + chip_w, y + chip_h)
                 cs = page.new_shape()
-                cs.draw_rect(chip_rect)
-                cs.finish(color=BLACK, fill=BLACK, width=0.25)
+                _draw_rounded_rect(cs, chip_rect, radius=2.0)
+                cs.finish(color=BLACK, fill=BLACK, width=0)
                 cs.commit()
                 page.insert_text(
                     fitz.Point(chip_rect.x0 + 4, y + 8.5), disp,
