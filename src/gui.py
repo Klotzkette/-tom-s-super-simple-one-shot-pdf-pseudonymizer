@@ -2,7 +2,7 @@
 PDF Anonymizer – Modern PyQt6 GUI with drag & drop, API key settings,
 and one-click anonymisation workflow.
 
-Design: Elegant light-blue tones with black accents, Arial font, no bold text.
+Design: Soft blue-teal tones with black accents, Arial font, no bold text.
 Sober and refined – Swiss-style minimalism.
 """
 
@@ -140,20 +140,20 @@ def load_scope() -> str:
 
 
 # ---------------------------------------------------------------------------
-# Colour palette – elegant light-blue tones with black accents
+# Colour palette – soft blue-teal tones with black accents
 # ---------------------------------------------------------------------------
 
-BG_DARK         = "#EDF2F7"         # soft blue-grey background
-BG_CARD         = "#F5F8FC"         # slightly lighter card surface
-BG_SURFACE      = "#E2EAF2"         # subtle blue tint for inputs/bars
-BG_HOVER        = "#D6E1ED"         # hover highlight
+BG_DARK         = "#EBF4F5"         # soft teal-tinted background
+BG_CARD         = "#F3F9FA"         # slightly lighter card surface
+BG_SURFACE      = "#DFF0F1"         # subtle teal for inputs/bars
+BG_HOVER        = "#D2E7E9"         # hover highlight
 
 ACCENT          = "#000000"         # black stays for text & accents
-ACCENT_HOVER    = "#1A2A3A"         # dark blue-black on hover
-ACCENT_SOFT     = "#3D5A73"         # muted steel-blue for secondary
+ACCENT_HOVER    = "#1A3038"         # dark teal-black on hover
+ACCENT_SOFT     = "#3D6670"         # muted teal for secondary
 
-BORDER          = "#C4D1DE"         # blue-grey border
-BORDER_FOCUS    = "#2B4A6B"         # darker blue on focus
+BORDER          = "#BFDADD"         # teal-grey border
+BORDER_FOCUS    = "#2B5E68"         # deeper teal on focus
 
 TEXT_PRIMARY    = "#000000"
 TEXT_SECONDARY  = "#555555"
@@ -1381,7 +1381,7 @@ def run_app():
         )
         sys.exit(1)
 
-    # Application palette (light-blue tones with black accents)
+    # Application palette (blue-teal tones with black accents)
     palette = QPalette()
     palette.setColor(QPalette.ColorRole.Window, QColor(BG_DARK))
     palette.setColor(QPalette.ColorRole.WindowText, QColor(TEXT_PRIMARY))

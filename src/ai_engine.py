@@ -76,25 +76,34 @@ Du musst folgende Kategorien erkennen – in ALLEN Sprachen, die im Text vorkomm
 
 WICHTIGE REGELN:
 - GRÜNDLICHKEIT: Gehe den Text DREIMAL durch. Prüfe JEDEN Eigennamen, JEDE Zahl, JEDE Adresse, JEDE Institution. ÜBERSEHE NICHTS.
-- NAMEN SIND PRIORITÄT NR. 1: Jeder Vor- und Nachname MUSS erkannt werden. Prüfe besonders: Briefköpfe, Anreden, Grußformeln, Unterschriftszeilen, E-Mail-Header, Vertragsparteien, Zeugen, Bevollmächtigte, Sachbearbeiter.
+- NAMEN SIND PRIORITÄT NR. 1: Jeder Vor- und Nachname MUSS erkannt werden. Prüfe besonders: Briefköpfe, Anreden, Grußformeln, Unterschriftszeilen, E-Mail-Header, Vertragsparteien, Zeugen, Bevollmächtigte, Sachbearbeiter, Kontoinhaberangaben, Eigentümerfelder.
 - INSTITUTSNAMEN SIND PRIORITÄT NR. 2: Jede namentlich genannte Institution muss erkannt werden. Banken (Sparkasse, Volksbank, Deutsche Bank, Commerzbank, etc.), Versicherungen (Allianz, HUK, etc.), Kanzleien, Behörden, Vereine – ALLES was eine konkrete Organisation identifiziert. Auch wenn der Name nur als Kurzform ("die Sparkasse", "bei der Volksbank") auftaucht.
-- KONTEXT NUTZEN: Wenn ein Name oder eine Institution an einer Stelle vorkommt, prüfe ob derselbe Name oder Teile davon auch an anderen Stellen auftauchen (z.B. "Herr Müller" und später nur "Müller", oder "Sparkasse Köln" und später nur "Sparkasse").
+- KONTEXT NUTZEN: Wenn ein Name oder eine Institution an einer Stelle vorkommt, prüfe ob derselbe Name oder Teile davon auch an JEDER anderen Stelle auftauchen – in JEDER Schreibweise: als Kurzform, mit Initialen, umgestellt, in Großbuchstaben, mit/ohne Titel. Beispiele:
+  * "Herr Hans Müller" → suche auch nach "Müller", "H. Müller", "MÜLLER", "Müller, Hans"
+  * "Sparkasse Köln-Bonn" → suche auch nach "Sparkasse", "SPARKASSE", "SKB"
+  * "Dr. Sabine Weber" → suche auch nach "Weber", "S. Weber", "WEBER"
+- TECHNISCHE DOKUMENTE – BESONDERE AUFMERKSAMKEIT:
+  * KONTOAUSZÜGE: Namen erscheinen in vielen Kontexten – als Kontoinhaber, Auftraggeber, Empfänger, in Überweisungsverwendungszwecken, in Daueraufträgen, als Lastschrift-Mandatsreferenz. JEDER Name in JEDER Buchungszeile muss erkannt werden!
+  * GRUNDBUCHAUSZÜGE: Namen erscheinen als Eigentümer, Belastete, Berechtigte, Begünstigte, Gläubiger, Antragsteller, in Eintragungsvermerken, in Abteilungen I-III. Auch Notarnamen, Urkundsbeamte. JEDER Name muss erkannt werden!
+  * VERSICHERUNGSDOKUMENTE: Versicherungsnehmer, Begünstigte, Schadensmeldungen – alle Personen und Institutionen.
+  * BEHÖRDENBRIEFE: Sachbearbeiter, Antragsteller, Bevollmächtigte, Aktenzeichen mit Namen.
+  * GEHALTSABRECHNUNGEN: Arbeitnehmer, Arbeitgeber, Krankenkasse, Finanzamt – alle Namen und Institutionen.
 - IM ZWEIFEL SCHWÄRZEN: Wenn du dir unsicher bist – markiere es TROTZDEM. Falsch-positive sind akzeptabel, falsch-negative NICHT.
 - Gleiche Entitäten sollen als EINE Entität behandelt werden.
-- Gib die Entitäten EXAKT so zurück, wie sie im Text stehen.
+- Gib die Entitäten EXAKT so zurück, wie sie im Text stehen. Wenn derselbe Name in verschiedenen Schreibweisen auftaucht ("Müller" und "MÜLLER"), melde BEIDE Schreibweisen als separate Entitäten.
 - Erkenne Entitäten in ALLEN Sprachen.
 - NICHT anonymisieren: §§, Gesetzesverweise, Standards (ISO, DIN), generische Begriffe.
 - NIEMALS anonymisieren: Gliederungsziffern, Nummerierungen! "1.", "1.1.", "a)", "(1)", "I.", "Nr. 1", "Abs. 1", "lit. a" – diese sind KEINE PII!
 
 CHECKLISTE – GEH DIESE DREIMAL DURCH bevor du antwortest:
-- [ ] Alle Vor- und Nachnamen im gesamten Text? (Auch in Briefköpfen, Fußzeilen, Grüßen?)
-- [ ] Alle Firmennamen und Institutsnamen? (Banken, Versicherungen, Kanzleien, Behörden?)
+- [ ] Alle Vor- und Nachnamen im gesamten Text? (Auch in Briefköpfen, Fußzeilen, Grüßen, Buchungszeilen, Eigentümerfeldern?)
+- [ ] Taucht derselbe Name woanders in anderer Schreibweise auf? (Kurzform, Initialen, GROSSBUCHSTABEN, umgestellt, mit Komma?)
+- [ ] Alle Firmennamen und Institutsnamen? (Banken, Versicherungen, Kanzleien, Behörden? Auch in Buchungszeilen, Verwendungszwecken?)
 - [ ] Alle Adressen (Straße, Hausnummer, PLZ, Stadt, Land)?
 - [ ] Alle Telefonnummern, E-Mails, Kontonummern, IBANs?
 - [ ] Alle Geldbeträge, Gehälter, Mieten, Prozentsätze?
 - [ ] Alle Aktenzeichen, Vertragsnummern, Referenznummern?
-- [ ] Alle Geburtsdaten?
-- [ ] Alle Steuer- und Sozialversicherungsnummern?
+- [ ] Alle Geburtsdaten, Steuer- und Sozialversicherungsnummern?
 - [ ] Hast du WIRKLICH nichts übersehen? Geh nochmal durch!
 
 Antworte AUSSCHLIESSLICH mit einem JSON-Objekt im folgenden Format, ohne weitere Erklärung:
@@ -119,9 +128,9 @@ Antworte AUSSCHLIESSLICH mit einem JSON-Objekt im folgenden Format, ohne weitere
 USER_PROMPT_TEMPLATE = """Analysiere den folgenden Text DREIMAL GRÜNDLICH und finde ALLE personenbezogenen und identifizierenden Daten.
 
 ANLEITUNG:
-1. ERSTER DURCHGANG: Gehe Satz für Satz vor. Markiere alle offensichtlichen Namen, Adressen, Nummern, Institutionen, Beträge.
-2. ZWEITER DURCHGANG: Prüfe ob Namen/Institutionen auch an anderen Stellen in Kurzform auftauchen. Suche nach übersehenen Telefonnummern, E-Mails, IBANs, Geldbeträgen.
-3. DRITTER DURCHGANG: Prüfe Briefköpfe, Fußzeilen, Grußformeln, Unterschriftszeilen nochmal separat. Hier verstecken sich oft Namen und Institutionen.
+1. ERSTER DURCHGANG: Gehe Satz für Satz, Zeile für Zeile vor. Markiere alle offensichtlichen Namen, Adressen, Nummern, Institutionen, Beträge. Auch in Tabellen, Buchungszeilen, Verwendungszwecken, Kopf-/Fußzeilen.
+2. ZWEITER DURCHGANG: Nimm dir JEDEN bereits gefundenen Namen und JEDE Institution und prüfe ob sie auch woanders vorkommen – in Kurzform, als Initialen ("H. Müller"), umgestellt ("Müller, Hans"), in GROSSBUCHSTABEN ("MÜLLER"), in Fließtext, in Tabellenzeilen. Melde JEDE gefundene Schreibweise als separate Entität. Suche auch nach übersehenen Telefonnummern, E-Mails, IBANs, Geldbeträgen.
+3. DRITTER DURCHGANG: Prüfe Briefköpfe, Fußzeilen, Grußformeln, Unterschriftszeilen, Kontoinhaberangaben, Eigentümerfelder, Empfängerfelder, Sachbearbeiterfelder nochmal separat.
 
 ABSOLUT VERBOTEN ALS ENTITÄT: Gliederungsziffern (1., 1.1., a), aa), I., II., (1), (a), Nr. 1, Abs. 2, lit. a etc.), §§-Verweise, Gesetzesnamen (BGB, DSGVO etc.).
 
@@ -130,7 +139,7 @@ TEXT:
 {text}
 \"\"\"
 
-Antworte NUR mit dem JSON-Objekt. Jeden Namen und jede Institution finden. Dokumentstruktur bewahren."""
+Antworte NUR mit dem JSON-Objekt. Jeden Namen und jede Institution in JEDER Schreibweise finden. Dokumentstruktur bewahren."""
 
 # ---------------------------------------------------------------------------
 # Intensity / scope prompt modifiers

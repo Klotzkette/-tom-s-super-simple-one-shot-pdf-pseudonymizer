@@ -1380,26 +1380,28 @@ def _is_legal_numbering(text: str) -> bool:
 def _expand_entity_map(entity_map: Dict[str, Tuple[str, str]]):
     """Derive additional PII fragments from compound entities.
 
-    Mutates *entity_map* in place.  Examples:
-    - "Sparkasse Köln-Bonn" (UNTERNEHMEN) → adds nothing extra (single brand)
-      BUT if the text also contains "Sparkasse" standalone, we want to catch it
-    - "Dr. Hans Müller" (NACHNAME) → adds "Hans Müller" if not already present
-    - "Hauptstraße 42a" → the street and number are already separate entities
+    Mutates *entity_map* in place.  Generates:
+    - Sub-word fragments (individual significant words from multi-word entities)
+    - Name order variants ("Hans Müller" → "Müller, Hans", "Müller Hans")
+    - Initial forms ("Hans Müller" → "H. Müller", "H.Müller")
+    - Case variants (UPPER / lower)
+    - Spaced / gesperrt variants ("S P A R K A S S E")
 
-    The goal is to catch the same PII even when it appears in a shorter
-    or slightly different form elsewhere in the document.
+    The goal is to catch the same PII even when it appears in a shorter,
+    reordered, abbreviated, or differently cased form elsewhere in the document.
     """
     additions: Dict[str, Tuple[str, str]] = {}
     existing = set(entity_map.keys())
+
+    # ── Titles / salutations to strip when generating sub-words ──
+    _NAME_TITLES = {"dr", "prof", "herr", "frau", "mr", "mrs", "ms",
+                    "von", "van", "de", "zu", "di", "dr.", "prof."}
 
     for text, (label, cat) in list(entity_map.items()):
         words = text.split()
 
         if cat == "UNTERNEHMEN" and len(words) >= 2:
-            # For compound company names, add significant sub-phrases.
-            # E.g. "Sparkasse Köln-Bonn" → "Sparkasse Köln-Bonn" is already
-            # there; but if text says just "Sparkasse" we need to catch it.
-            # Add each word that is >= 4 chars and not a generic legal suffix.
+            # For compound company names, add significant sub-words.
             for w in words:
                 wl = w.lower().rstrip(".,;:")
                 if len(wl) >= 4 and wl not in _GENERIC_SUFFIXES and w not in existing:
@@ -1407,15 +1409,48 @@ def _expand_entity_map(entity_map: Dict[str, Tuple[str, str]]):
                         additions[w] = (label, cat)
 
         elif cat in ("VORNAME", "NACHNAME") and len(words) >= 2:
-            # "Dr. Hans" → "Hans" should also be caught
+            # ── Sub-word extraction ──
+            # "Dr. Hans Müller" → "Hans", "Müller"
+            name_parts = []
             for w in words:
                 wl = w.rstrip(".")
                 if (len(wl) >= 2 and w not in existing
-                        and wl.lower() not in ("dr", "prof", "herr", "frau",
-                                                "mr", "mrs", "ms", "von",
-                                                "van", "de", "zu", "di")):
+                        and wl.lower() not in _NAME_TITLES):
                     if not _is_legal_numbering(w):
                         additions[w] = (label, cat)
+                        name_parts.append(w)
+                elif wl.lower() not in _NAME_TITLES and len(wl) >= 2:
+                    name_parts.append(w)
+
+            # ── Name order variants ──
+            # "Hans Müller" → "Müller, Hans" and "Müller Hans"
+            pure_parts = [w for w in words if w.rstrip(".").lower() not in _NAME_TITLES]
+            if len(pure_parts) == 2:
+                a, b = pure_parts
+                reversed_comma = f"{b}, {a}"
+                reversed_plain = f"{b} {a}"
+                for var in (reversed_comma, reversed_plain):
+                    if var != text and var not in existing and var not in additions:
+                        additions[var] = (label, cat)
+
+                # ── Initial forms ──
+                # "Hans Müller" → "H. Müller", "H.Müller"
+                initial_a = a[0] + "."
+                initial_b = b[0] + "."
+                for var in (f"{initial_a} {b}", f"{initial_a}{b}",
+                            f"{a} {initial_b}", f"{initial_b} {a}",
+                            f"{initial_a} {initial_b}"):
+                    if len(var) >= 3 and var not in existing and var not in additions:
+                        additions[var] = (label, cat)
+
+            elif len(pure_parts) == 3:
+                # "Hans Peter Müller" → "H. P. Müller", "H.P. Müller"
+                a, b, c = pure_parts
+                for var in (f"{a[0]}. {b[0]}. {c}", f"{a[0]}.{b[0]}. {c}",
+                            f"{c}, {a} {b}", f"{c} {a} {b}",
+                            f"{a[0]}. {c}", f"{a} {b[0]}. {c}"):
+                    if len(var) >= 3 and var not in existing and var not in additions:
+                        additions[var] = (label, cat)
 
     entity_map.update(additions)
 
