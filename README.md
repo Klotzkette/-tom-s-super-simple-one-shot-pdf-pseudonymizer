@@ -5,7 +5,7 @@ KI-gestütztes Tool zur automatischen Anonymisierung personenbezogener Daten in 
 ## Funktionsweise
 
 1. **Programm starten** – `PDFAnonymizer.exe` (Windows) oder `python src/main.py`
-2. **API-Key hinterlegen** – Über ⚙ Einstellungen den Key für OpenAI, Anthropic oder Google Gemini eingeben
+2. **API-Key hinterlegen** – Über ⚙ Einstellungen den Key für OpenAI eingeben
 3. **PDF laden** – Per Drag & Drop oder über „PDF auswählen"
 4. **Speicherort wählen** – Das anonymisierte PDF wird dort abgelegt
 5. **Fertig** – Das Tool erkennt automatisch alle PII-Daten und ersetzt sie
@@ -36,10 +36,8 @@ Die anonymisierten Stellen werden **türkis** überdeckt, die Variable wird in w
 ## Voraussetzungen
 
 - **Das PDF muss bereits Texterkennung (OCR) enthalten.** Gescannte Bilder ohne eingebetteten Text können nicht verarbeitet werden.
-- Ein gültiger API-Key für mindestens einen der unterstützten KI-Anbieter:
-  - **OpenAI** (ChatGPT) – `sk-...`
-  - **Anthropic** (Claude) – `sk-ant-...`
-  - **Google Gemini** – `AI...`
+- Ein gültiger API-Key für OpenAI:
+  - **OpenAI** (GPT-5.4) – `sk-...`
 
 ## Installation & Build (Windows EXE)
 
@@ -69,14 +67,12 @@ pip install -r requirements.txt
 pyinstaller build.spec
 ```
 
-## Unterstützte KI-Anbieter
+## Unterstützter KI-Anbieter
 
 | Anbieter | Modell | Kosten |
 |---|---|---|
-| OpenAI | GPT-5.2 | nach Verbrauch |
-
-
+| OpenAI | GPT-5.4 | nach Verbrauch |
 
 ## Datenschutz
 
-Der Text des PDFs wird an den gewählten KI-Anbieter gesendet, um die personenbezogenen Daten zu erkennen. Stellen Sie sicher, dass dies mit Ihren Datenschutzanforderungen vereinbar ist.
+Der Text des PDFs wird an OpenAI gesendet, um die personenbezogenen Daten zu erkennen. Stellen Sie sicher, dass dies mit Ihren Datenschutzanforderungen vereinbar ist.
