@@ -73,7 +73,7 @@ pyinstaller build.spec
 
 | Anbieter | Modell | Kosten |
 |---|---|---|
-| OpenAI | GPT-5.2 | nach Verbrauch |
+| OpenAI | GPT-5.4 | nach Verbrauch |
 
 
 

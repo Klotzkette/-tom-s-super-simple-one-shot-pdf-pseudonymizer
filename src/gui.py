@@ -835,7 +835,7 @@ class SettingsDialog(QDialog):
         layout.addSpacing(8)
 
         # -- Model info pill --
-        model_label = QLabel("\u2728  Modell: GPT-5.2")
+        model_label = QLabel("\u2728  Modell: GPT-5.4")
         model_label.setStyleSheet(
             f"color: {ACCENT}; font-size: 12px; "
             f"background-color: #EBF4FF; "

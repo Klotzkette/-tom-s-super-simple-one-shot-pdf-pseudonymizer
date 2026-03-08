@@ -183,7 +183,7 @@ def _gpt_vision_ocr(pdf_path: str, api_key: str,
 
         try:
             resp = client.chat.completions.create(
-                model="gpt-5.2",
+                model="gpt-5.4",
                 messages=[{
                     "role": "user",
                     "content": [
@@ -1278,7 +1278,7 @@ def _detect_visuals_with_vision(page, api_key: str) -> List[Tuple[fitz.Rect, str
         from openai import OpenAI
         client = OpenAI(api_key=api_key)
         response = client.chat.completions.create(
-            model="gpt-5.2",
+            model="gpt-5.4",
             messages=[
                 {
                     "role": "user",

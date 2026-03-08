@@ -244,7 +244,7 @@ def _parse_ai_response(response_text: str) -> List[Dict[str, str]]:
 # Provider implementations
 # ---------------------------------------------------------------------------
 
-MODEL = "gpt-5.2"
+MODEL = "gpt-5.4"
 
 
 def detect_entities_openai(
