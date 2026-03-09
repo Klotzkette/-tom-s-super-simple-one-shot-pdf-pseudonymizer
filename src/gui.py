@@ -846,24 +846,52 @@ class SettingsDialog(QDialog):
         lm_layout = QFormLayout(lm_group)
         lm_layout.setSpacing(10)
 
+        # URL row
+        url_row = QHBoxLayout()
+        url_row.setSpacing(8)
         self.url_field = QLineEdit(load_lm_studio_url())
         self.url_field.setPlaceholderText("http://127.0.0.1:1234/v1")
         self.url_field.setMinimumHeight(38)
-        self.url_field.textChanged.connect(self._on_field_changed)
-        lm_layout.addRow("Base URL:", self.url_field)
+        self.url_field.textChanged.connect(self._on_url_changed)
+        url_row.addWidget(self.url_field, stretch=1)
+        lm_layout.addRow("Base URL:", url_row)
 
-        self.model_field = QLineEdit(load_lm_studio_model())
-        self.model_field.setPlaceholderText("qwen3-14b")
-        self.model_field.setMinimumHeight(38)
-        self.model_field.textChanged.connect(self._on_field_changed)
-        lm_layout.addRow("Modellname:", self.model_field)
+        # Model row: editable combo + "Modelle laden" button
+        model_row = QHBoxLayout()
+        model_row.setSpacing(8)
+        self.model_combo = QComboBox()
+        self.model_combo.setEditable(True)
+        self.model_combo.setMinimumHeight(38)
+        saved_model = load_lm_studio_model()
+        if saved_model:
+            self.model_combo.addItem(saved_model)
+        else:
+            self.model_combo.addItem("qwen3-14b")
+        model_row.addWidget(self.model_combo, stretch=1)
+
+        self.load_models_btn = QPushButton("Modelle laden")
+        self.load_models_btn.setObjectName("selectBtn")
+        self.load_models_btn.setMinimumHeight(38)
+        self.load_models_btn.setToolTip(
+            "Verbindet mit LM Studio und lädt die verfügbaren Modelle"
+        )
+        self.load_models_btn.clicked.connect(self._load_models)
+        model_row.addWidget(self.load_models_btn)
+        lm_layout.addRow("Modellname:", model_row)
 
         layout.addWidget(lm_group)
 
+        # -- Status label (shows connection result) --
+        self.conn_status_label = QLabel("")
+        self.conn_status_label.setWordWrap(True)
+        self.conn_status_label.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 11px;")
+        layout.addWidget(self.conn_status_label)
+
         # -- Hint --
         hint = QLabel(
-            "Tipp: Den Modellnamen finden Sie in LM Studio unter dem geladenen Modell.\n"
-            "Beispiele: qwen3-14b, qwen2.5-7b-instruct, mistral-7b-instruct"
+            "Tipp: Klicken Sie „Modelle laden" um die in LM Studio verfügbaren\n"
+            "Modelle abzurufen und aus einer Liste auszuwählen.\n"
+            "LM Studio muss laufen und der lokale Server gestartet sein."
         )
         hint.setWordWrap(True)
         hint.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 11px;")
@@ -888,17 +916,64 @@ class SettingsDialog(QDialog):
 
         layout.addLayout(btn_layout)
 
-    def _on_field_changed(self):
-        """Give a green border hint when the field has content."""
-        for field in (self.url_field, self.model_field):
-            has_value = bool(field.text().strip())
-            field.setProperty("valid", has_value)
-            field.style().unpolish(field)
-            field.style().polish(field)
+    def _on_url_changed(self):
+        has_value = bool(self.url_field.text().strip())
+        self.url_field.setProperty("valid", has_value)
+        self.url_field.style().unpolish(self.url_field)
+        self.url_field.style().polish(self.url_field)
+
+    def _load_models(self):
+        """Query GET /v1/models on the configured LM Studio server and populate the combo."""
+        base_url = self.url_field.text().strip() or "http://127.0.0.1:1234/v1"
+        self.load_models_btn.setEnabled(False)
+        self.load_models_btn.setText("Lädt …")
+        self.conn_status_label.setText("")
+        QApplication.processEvents()
+        try:
+            from openai import OpenAI
+            # Authorization: Bearer lm-studio is sent automatically via api_key
+            client = OpenAI(base_url=base_url, api_key="lm-studio")
+            models_resp = client.models.list()
+            model_ids = sorted([m.id for m in models_resp.data])
+            if not model_ids:
+                self.conn_status_label.setStyleSheet(
+                    f"color: {ERROR}; font-size: 11px;"
+                )
+                self.conn_status_label.setText(
+                    "Verbunden, aber keine Modelle gefunden.\n"
+                    "Bitte ein Modell in LM Studio laden und den Server starten."
+                )
+                return
+            current = self.model_combo.currentText().strip()
+            self.model_combo.clear()
+            self.model_combo.addItems(model_ids)
+            # Restore previous selection
+            idx = self.model_combo.findText(current)
+            if idx >= 0:
+                self.model_combo.setCurrentIndex(idx)
+            elif current:
+                self.model_combo.setCurrentText(current)
+            self.conn_status_label.setStyleSheet(
+                f"color: {SUCCESS}; font-size: 11px;"
+            )
+            self.conn_status_label.setText(
+                f"\u2713  Verbunden – {len(model_ids)} Modell(e) gefunden."
+            )
+        except Exception as e:
+            self.conn_status_label.setStyleSheet(
+                f"color: {ERROR}; font-size: 11px;"
+            )
+            self.conn_status_label.setText(
+                f"\u2717  Verbindung fehlgeschlagen: {e}\n\n"
+                "Prüfen Sie: Ist LM Studio gestartet? Ist der lokale Server aktiv?"
+            )
+        finally:
+            self.load_models_btn.setEnabled(True)
+            self.load_models_btn.setText("Modelle laden")
 
     def save_and_close(self):
         save_lm_studio_url(self.url_field.text().strip() or "http://127.0.0.1:1234/v1")
-        save_lm_studio_model(self.model_field.text().strip() or "qwen3-14b")
+        save_lm_studio_model(self.model_combo.currentText().strip() or "qwen3-14b")
         self.accept()
 
 

@@ -166,6 +166,107 @@ Jedes in LM Studio ladbare Modell mit Chat-Unterstützung funktioniert. Empfehlu
 | Qwen2.5-7B-Instruct | ★★★★☆ | ~5 GB |
 | Qwen2.5-14B-Instruct | ★★★★★ | ~10 GB |
 
+## Technische Details – API-Kommunikation
+
+Der PDF-Anonymizer kommuniziert mit LM Studio über die OpenAI-kompatible REST-API:
+
+**Endpunkt:**
+```
+POST http://127.0.0.1:1234/v1/chat/completions
+```
+
+**Request-Format:**
+```json
+{
+  "model": "qwen3-14b",
+  "messages": [
+    {"role": "system", "content": "...System-Prompt..."},
+    {"role": "user",   "content": "...Text zur Analyse..."}
+  ],
+  "temperature": 0.0,
+  "max_tokens": 16384
+}
+```
+
+**Erforderliche HTTP-Header:**
+```
+Content-Type: application/json
+Authorization: Bearer lm-studio
+```
+
+> LM Studio prüft den API-Key nicht inhaltlich, erwartet aber formal den `Authorization: Bearer`-Header. Der Wert `lm-studio` ist der fest codierte Platzhalter, der vom openai Python-Client automatisch gesetzt wird.
+
+**Im Python-Code (openai Library):**
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="http://127.0.0.1:1234/v1",
+    api_key="lm-studio"          # setzt Authorization: Bearer lm-studio
+)
+
+response = client.chat.completions.create(
+    model="qwen3-14b",
+    messages=[
+        {"role": "system", "content": "..."},
+        {"role": "user",   "content": "..."}
+    ],
+    temperature=0.0,
+    max_tokens=16384,
+)
+```
+
+**Verfügbare Modelle abfragen:**
+```
+GET http://127.0.0.1:1234/v1/models
+Authorization: Bearer lm-studio
+```
+→ Gibt eine Liste der geladenen Modelle zurück. In der GUI: Button **„Modelle laden"** in den Einstellungen.
+
+---
+
+## Troubleshooting / Verbindungstest
+
+### Schritt 1 – Verbindung testen (curl)
+
+```bash
+curl http://127.0.0.1:1234/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer lm-studio" \
+  -d '{"model":"qwen3-14b","messages":[{"role":"user","content":"Hallo"}]}'
+```
+
+Erwartete Antwort (gekürzt):
+```json
+{"choices":[{"message":{"role":"assistant","content":"Hallo! Wie kann ich helfen?"}}]}
+```
+
+### Schritt 2 – Modelle auflisten
+
+```bash
+curl http://127.0.0.1:1234/v1/models \
+  -H "Authorization: Bearer lm-studio"
+```
+
+Erwartete Antwort:
+```json
+{"data":[{"id":"qwen3-14b","object":"model",...}]}
+```
+
+### Häufige Probleme
+
+| Problem | Ursache | Lösung |
+|---|---|---|
+| `Connection refused` | LM Studio nicht gestartet oder Server nicht aktiv | LM Studio öffnen → Tab „Local Server" → „Start Server" |
+| `Connection refused` (Windows) | Tray-Icon-Server nicht aktiv | Rechtsklick auf LM Studio Tray-Icon → **„Start server on port 1234"** |
+| `No models found` | Kein Modell geladen | In LM Studio ein Modell laden (My Models → Load) |
+| Falsche Antwort / JSON-Fehler | Falscher Modellname | In Einstellungen „Modelle laden" klicken und Modell aus der Liste wählen |
+| Sehr langsame Verarbeitung | Modell zu groß für verfügbaren RAM | Kleineres Modell wählen (z. B. Qwen3-4B statt 14B) |
+
+> **Hinweis für Windows:** Je nach LM Studio-Version muss der Server explizit über das Tray-Icon gestartet werden. Rechtsklick auf das LM Studio-Symbol in der Taskleiste → **„Start server on port 1234"**.
+
+---
+
 ## Datenschutz
 
 Der Text des PDFs wird **ausschließlich lokal** verarbeitet. Es findet **keine Übertragung** an externe Server statt. LM Studio läuft vollständig auf Ihrem Gerät.
