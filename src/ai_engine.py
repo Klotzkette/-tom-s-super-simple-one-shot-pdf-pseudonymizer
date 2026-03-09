@@ -254,6 +254,32 @@ def _parse_ai_response(response_text: str) -> List[Dict[str, str]]:
 # LM Studio implementation
 # ---------------------------------------------------------------------------
 
+def _get_client(base_url: str):
+    """Return a cached OpenAI client for the given base_url.
+
+    Reuses the same client across calls to avoid creating a new HTTP
+    session on every chunk – noticeably faster for multi-chunk PDFs.
+    """
+    cache = getattr(_get_client, "_cache", {})
+    if base_url not in cache:
+        from openai import OpenAI
+        cache[base_url] = OpenAI(
+            base_url=base_url,
+            api_key="lm-studio",  # Authorization: Bearer lm-studio
+            timeout=300.0,
+        )
+        _get_client._cache = cache
+    return cache[base_url]
+
+
+def _safe_content(response) -> str:
+    """Extract message content from an API response, handling None."""
+    content = response.choices[0].message.content
+    if content is None:
+        return ""
+    return content
+
+
 def detect_entities_lm_studio(
     base_url: str,
     model: str,
@@ -262,8 +288,7 @@ def detect_entities_lm_studio(
     scope: str = SCOPE_ALL,
 ) -> List[Dict[str, str]]:
     """Use a local LM Studio model to detect PII entities."""
-    from openai import OpenAI
-    client = OpenAI(base_url=base_url, api_key="lm-studio")
+    client = _get_client(base_url)
     user_prompt = _build_user_prompt(text, intensity, scope)
     response = client.chat.completions.create(
         model=model,
@@ -274,7 +299,10 @@ def detect_entities_lm_studio(
         temperature=0.0,
         max_tokens=16384,
     )
-    entities = _parse_ai_response(response.choices[0].message.content)
+    content = _safe_content(response)
+    if not content:
+        return []
+    entities = _parse_ai_response(content)
 
     # Post-filter for person-data scope (belt and suspenders)
     if scope == SCOPE_NAMES_ONLY:
@@ -302,8 +330,7 @@ def generate_natural_replacements_lm_studio(
 
     entities_json = json.dumps(items, ensure_ascii=False, indent=2)
 
-    from openai import OpenAI
-    client = OpenAI(base_url=base_url, api_key="lm-studio")
+    client = _get_client(base_url)
     response = client.chat.completions.create(
         model=model,
         messages=[
@@ -315,12 +342,27 @@ def generate_natural_replacements_lm_studio(
         temperature=0.7,
         max_tokens=16384,
     )
-    text = response.choices[0].message.content.strip()
-    fence = re.search(r"```(?:json)?\s*\n?(.*?)```", text, re.DOTALL)
-    if fence:
-        text = fence.group(1).strip()
-    data = json.loads(text)
-    return data.get("replacements", {})
+    content = _safe_content(response)
+    if not content:
+        return {}
+    try:
+        text = content.strip()
+        fence = re.search(r"```(?:json)?\s*\n?(.*?)```", text, re.DOTALL)
+        if fence:
+            text = fence.group(1).strip()
+        data = json.loads(text)
+        return data.get("replacements", {})
+    except (json.JSONDecodeError, ValueError):
+        # Fallback: try to extract JSON object from messy output
+        start = content.find("{")
+        end = content.rfind("}") + 1
+        if start >= 0 and end > start:
+            try:
+                data = json.loads(content[start:end])
+                return data.get("replacements", {})
+            except (json.JSONDecodeError, ValueError):
+                pass
+        return {}
 
 
 # ---------------------------------------------------------------------------

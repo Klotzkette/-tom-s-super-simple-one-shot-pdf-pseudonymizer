@@ -52,13 +52,10 @@ _GENERIC_SUFFIXES = {
 
 def _has_text_layer(pdf_path: str) -> bool:
     """Check if a PDF has an extractable text layer."""
-    doc = fitz.open(pdf_path)
-    for page in doc:
-        text = page.get_text("text")
-        if text.strip():
-            doc.close()
-            return True
-    doc.close()
+    with fitz.open(pdf_path) as doc:
+        for page in doc:
+            if page.get_text("text").strip():
+                return True
     return False
 
 

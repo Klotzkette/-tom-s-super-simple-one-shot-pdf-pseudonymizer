@@ -932,7 +932,7 @@ class SettingsDialog(QDialog):
         try:
             from openai import OpenAI
             # Authorization: Bearer lm-studio is sent automatically via api_key
-            client = OpenAI(base_url=base_url, api_key="lm-studio")
+            client = OpenAI(base_url=base_url, api_key="lm-studio", timeout=10.0)
             models_resp = client.models.list()
             model_ids = sorted([m.id for m in models_resp.data])
             if not model_ids:
@@ -1320,7 +1320,7 @@ class MainWindow(QMainWindow):
         if has_model:
             self.statusBar().showMessage("Bereit  \u00b7  PDF ablegen oder ausw\u00e4hlen  \u00b7  v2.0")
         else:
-            self.statusBar().showMessage("Bitte zuerst einen API-Key in den Einstellungen hinterlegen  \u00b7  v2.0")
+            self.statusBar().showMessage("Bitte zuerst ein Modell in den Einstellungen konfigurieren  \u00b7  v2.0")
 
     def _current_mode(self) -> str:
         return self._selected_mode
@@ -1453,8 +1453,14 @@ class MainWindow(QMainWindow):
         self.worker.entity_count.connect(self._on_entity_count)
         self.worker.finished_ok.connect(self.on_success)
         self.worker.finished_err.connect(self.on_error)
-        self.worker.finished.connect(self.worker.deleteLater)
+        self.worker.finished.connect(self._on_worker_finished)
         self.worker.start()
+
+    def _on_worker_finished(self):
+        """Clean up the worker reference after the thread finishes."""
+        if self.worker:
+            self.worker.deleteLater()
+            self.worker = None
 
     def _on_entity_count(self, count: int):
         self._entity_count = count
