@@ -89,24 +89,24 @@ def _settings() -> QSettings:
     return QSettings(SETTINGS_ORG, SETTINGS_APP)
 
 
-def save_api_key(provider: str, key: str):
+def save_lm_studio_url(url: str):
     s = _settings()
-    s.setValue(f"api_keys/{provider}", key)
+    s.setValue("lm_studio/base_url", url)
 
 
-def load_api_key(provider: str) -> str:
+def load_lm_studio_url() -> str:
     s = _settings()
-    return s.value(f"api_keys/{provider}", "")
+    return s.value("lm_studio/base_url", "http://127.0.0.1:1234/v1")
 
 
-def save_provider(provider: str):
+def save_lm_studio_model(model: str):
     s = _settings()
-    s.setValue("selected_provider", provider)
+    s.setValue("lm_studio/model", model)
 
 
-def load_provider() -> str:
+def load_lm_studio_model() -> str:
     s = _settings()
-    return s.value("selected_provider", "openai")
+    return s.value("lm_studio/model", "qwen3-14b")
 
 
 def save_output_dir(path: str):
@@ -686,16 +686,16 @@ class AnonymizeWorker(QThread):
         self,
         input_path: str,
         output_path: str,
-        provider: str,
-        api_key: str,
+        base_url: str,
+        model: str,
         mode: str = MODE_ANONYMIZE,
         scope: str = SCOPE_ALL,
     ):
         super().__init__()
         self.input_path = input_path
         self.output_path = output_path
-        self.provider = provider
-        self.api_key = api_key
+        self.base_url = base_url
+        self.model = model
         self.mode = mode
         self.scope = scope
         self._temp_pdf: str | None = None
@@ -709,7 +709,8 @@ class AnonymizeWorker(QThread):
 
             pdf_path = prepare_input(
                 self.input_path,
-                api_key=self.api_key,
+                base_url=self.base_url,
+                model=self.model,
                 status_callback=lambda msg: self.status.emit(msg),
             )
             if pdf_path != self.input_path:
@@ -730,7 +731,7 @@ class AnonymizeWorker(QThread):
                 self.progress.emit(12 + int(pct * 0.28))
 
             entities = detect_entities(
-                self.provider, self.api_key, text,
+                self.base_url, self.model, text,
                 progress_callback=_ai_progress,
                 intensity=INTENSITY_HARD,
                 scope=self.scope,
@@ -755,7 +756,7 @@ class AnonymizeWorker(QThread):
                 self.status.emit(f"{len(entities)} Entitäten erkannt – generiere Ersetzungen …")
                 self.progress.emit(42)
                 replacements = generate_natural_replacements(
-                    self.provider, self.api_key, entities,
+                    self.base_url, self.model, entities,
                 )
             else:
                 self.step.emit("Schritt 4/5  –  Variablen zuweisen")
@@ -778,7 +779,7 @@ class AnonymizeWorker(QThread):
             redact_pdf(
                 pdf_path, self.output_path, entity_map,
                 mode=self.mode, progress_callback=_pdf_progress,
-                api_key=self.api_key,
+                base_url=self.base_url, model=self.model,
             )
 
             self._cleanup_temp()
@@ -803,20 +804,11 @@ class AnonymizeWorker(QThread):
 # Settings dialog (polished)
 # ---------------------------------------------------------------------------
 
-PROVIDER_NAMES = {
-    "openai":    "OpenAI (GPT-5.4)",
-}
-PROVIDER_KEYS = ["openai"]
-PROVIDER_PLACEHOLDERS = {
-    "openai":    "sk-...",
-}
-
-
 class SettingsDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Einstellungen")
-        self.setMinimumWidth(480)
+        self.setMinimumWidth(520)
         self.setStyleSheet(STYLESHEET)
 
         layout = QVBoxLayout(self)
@@ -827,38 +819,84 @@ class SettingsDialog(QDialog):
         header = QLabel("\u2699  Einstellungen")
         header.setStyleSheet(f"color: {TEXT_PRIMARY}; font-size: 18px; letter-spacing: -0.3px;")
         layout.addWidget(header)
-        desc = QLabel("Hinterlegen Sie Ihren OpenAI API-Key f\u00fcr die KI-Analyse.")
+        desc = QLabel(
+            "Konfigurieren Sie LM Studio für die lokale KI-Analyse.\n"
+            "LM Studio muss laufen und ein Modell geladen sein."
+        )
         desc.setWordWrap(True)
         desc.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 12px;")
         layout.addWidget(desc)
 
         layout.addSpacing(8)
 
-        # -- Model info pill --
-        model_label = QLabel("\u2728  Modell: GPT-5.4")
-        model_label.setStyleSheet(
+        # -- LM Studio info pill --
+        info_label = QLabel("\U0001f4bb  Läuft vollständig lokal – kein Internet erforderlich")
+        info_label.setStyleSheet(
             f"color: {ACCENT}; font-size: 12px; "
             f"background-color: #EBF4FF; "
             f"border: 1px solid {ACCENT_GLOW}; "
             f"border-radius: 10px; padding: 8px 14px;"
         )
-        layout.addWidget(model_label)
+        layout.addWidget(info_label)
 
         layout.addSpacing(4)
 
-        # -- API key --
-        keys_group = QGroupBox("API-Key")
-        keys_layout = QFormLayout(keys_group)
-        keys_layout.setSpacing(10)
+        # -- LM Studio connection settings --
+        lm_group = QGroupBox("LM Studio Verbindung")
+        lm_layout = QFormLayout(lm_group)
+        lm_layout.setSpacing(10)
 
-        self.key_field = QLineEdit(load_api_key("openai"))
-        self.key_field.setPlaceholderText("sk-...")
-        self.key_field.setEchoMode(QLineEdit.EchoMode.Password)
-        self.key_field.setMinimumHeight(38)
-        self.key_field.textChanged.connect(self._on_key_changed)
-        keys_layout.addRow("OpenAI:", self.key_field)
+        # URL row
+        url_row = QHBoxLayout()
+        url_row.setSpacing(8)
+        self.url_field = QLineEdit(load_lm_studio_url())
+        self.url_field.setPlaceholderText("http://127.0.0.1:1234/v1")
+        self.url_field.setMinimumHeight(38)
+        self.url_field.textChanged.connect(self._on_url_changed)
+        url_row.addWidget(self.url_field, stretch=1)
+        lm_layout.addRow("Base URL:", url_row)
 
-        layout.addWidget(keys_group)
+        # Model row: editable combo + "Modelle laden" button
+        model_row = QHBoxLayout()
+        model_row.setSpacing(8)
+        self.model_combo = QComboBox()
+        self.model_combo.setEditable(True)
+        self.model_combo.setMinimumHeight(38)
+        saved_model = load_lm_studio_model()
+        if saved_model:
+            self.model_combo.addItem(saved_model)
+        else:
+            self.model_combo.addItem("qwen3-14b")
+        model_row.addWidget(self.model_combo, stretch=1)
+
+        self.load_models_btn = QPushButton("Modelle laden")
+        self.load_models_btn.setObjectName("selectBtn")
+        self.load_models_btn.setMinimumHeight(38)
+        self.load_models_btn.setToolTip(
+            "Verbindet mit LM Studio und lädt die verfügbaren Modelle"
+        )
+        self.load_models_btn.clicked.connect(self._load_models)
+        model_row.addWidget(self.load_models_btn)
+        lm_layout.addRow("Modellname:", model_row)
+
+        layout.addWidget(lm_group)
+
+        # -- Status label (shows connection result) --
+        self.conn_status_label = QLabel("")
+        self.conn_status_label.setWordWrap(True)
+        self.conn_status_label.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 11px;")
+        layout.addWidget(self.conn_status_label)
+
+        # -- Hint --
+        hint = QLabel(
+            "Tipp: Klicken Sie „Modelle laden" um die in LM Studio verfügbaren\n"
+            "Modelle abzurufen und aus einer Liste auszuwählen.\n"
+            "LM Studio muss laufen und der lokale Server gestartet sein."
+        )
+        hint.setWordWrap(True)
+        hint.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 11px;")
+        layout.addWidget(hint)
+
         layout.addStretch()
 
         # -- Buttons --
@@ -878,16 +916,64 @@ class SettingsDialog(QDialog):
 
         layout.addLayout(btn_layout)
 
-    def _on_key_changed(self):
-        """Give a green border hint when the key field has content."""
-        has_value = bool(self.key_field.text().strip())
-        self.key_field.setProperty("valid", has_value)
-        self.key_field.style().unpolish(self.key_field)
-        self.key_field.style().polish(self.key_field)
+    def _on_url_changed(self):
+        has_value = bool(self.url_field.text().strip())
+        self.url_field.setProperty("valid", has_value)
+        self.url_field.style().unpolish(self.url_field)
+        self.url_field.style().polish(self.url_field)
+
+    def _load_models(self):
+        """Query GET /v1/models on the configured LM Studio server and populate the combo."""
+        base_url = self.url_field.text().strip() or "http://127.0.0.1:1234/v1"
+        self.load_models_btn.setEnabled(False)
+        self.load_models_btn.setText("Lädt …")
+        self.conn_status_label.setText("")
+        QApplication.processEvents()
+        try:
+            from openai import OpenAI
+            # Authorization: Bearer lm-studio is sent automatically via api_key
+            client = OpenAI(base_url=base_url, api_key="lm-studio", timeout=10.0)
+            models_resp = client.models.list()
+            model_ids = sorted([m.id for m in models_resp.data])
+            if not model_ids:
+                self.conn_status_label.setStyleSheet(
+                    f"color: {ERROR}; font-size: 11px;"
+                )
+                self.conn_status_label.setText(
+                    "Verbunden, aber keine Modelle gefunden.\n"
+                    "Bitte ein Modell in LM Studio laden und den Server starten."
+                )
+                return
+            current = self.model_combo.currentText().strip()
+            self.model_combo.clear()
+            self.model_combo.addItems(model_ids)
+            # Restore previous selection
+            idx = self.model_combo.findText(current)
+            if idx >= 0:
+                self.model_combo.setCurrentIndex(idx)
+            elif current:
+                self.model_combo.setCurrentText(current)
+            self.conn_status_label.setStyleSheet(
+                f"color: {SUCCESS}; font-size: 11px;"
+            )
+            self.conn_status_label.setText(
+                f"\u2713  Verbunden – {len(model_ids)} Modell(e) gefunden."
+            )
+        except Exception as e:
+            self.conn_status_label.setStyleSheet(
+                f"color: {ERROR}; font-size: 11px;"
+            )
+            self.conn_status_label.setText(
+                f"\u2717  Verbindung fehlgeschlagen: {e}\n\n"
+                "Prüfen Sie: Ist LM Studio gestartet? Ist der lokale Server aktiv?"
+            )
+        finally:
+            self.load_models_btn.setEnabled(True)
+            self.load_models_btn.setText("Modelle laden")
 
     def save_and_close(self):
-        save_api_key("openai", self.key_field.text().strip())
-        save_provider("openai")
+        save_lm_studio_url(self.url_field.text().strip() or "http://127.0.0.1:1234/v1")
+        save_lm_studio_model(self.model_combo.currentText().strip() or "qwen3-14b")
         self.accept()
 
 
@@ -1224,25 +1310,17 @@ class MainWindow(QMainWindow):
     # -- Helpers --
 
     def _update_provider_pill(self):
-        has_key = bool(load_api_key("openai"))
-        if has_key:
-            self.provider_pill.setText("GPT-5.4")
-            self.provider_pill.setStyleSheet("")  # reset to default from stylesheet
-        else:
-            self.provider_pill.setText("GPT-5.4  \u00b7  kein Key")
-            self.provider_pill.setStyleSheet(
-                f"color: {ERROR}; background-color: {ERROR_BG}; "
-                f"border: 1px solid {ERROR_BORDER}; "
-                f"border-radius: 14px; padding: 4px 12px; font-size: 11px;"
-            )
+        model = load_lm_studio_model() or "qwen3-14b"
+        self.provider_pill.setText(f"LM Studio  \u00b7  {model}")
+        self.provider_pill.setStyleSheet("")  # reset to default from stylesheet
 
     def _update_statusbar_idle(self):
-        prov = load_provider()
-        has_key = bool(load_api_key(prov))
-        if has_key:
+        model = load_lm_studio_model()
+        has_model = bool(model)
+        if has_model:
             self.statusBar().showMessage("Bereit  \u00b7  PDF ablegen oder ausw\u00e4hlen  \u00b7  v2.0")
         else:
-            self.statusBar().showMessage("Bitte zuerst einen API-Key in den Einstellungen hinterlegen  \u00b7  v2.0")
+            self.statusBar().showMessage("Bitte zuerst ein Modell in den Einstellungen konfigurieren  \u00b7  v2.0")
 
     def _current_mode(self) -> str:
         return self._selected_mode
@@ -1319,19 +1397,20 @@ class MainWindow(QMainWindow):
         if not self.current_pdf:
             return
 
-        # Check API key
-        provider = load_provider()
-        api_key = load_api_key(provider)
-        if not api_key:
+        # Load LM Studio settings
+        base_url = load_lm_studio_url()
+        model = load_lm_studio_model()
+        if not model:
             QMessageBox.warning(
                 self,
-                "Kein API-Key",
-                f"Bitte hinterlegen Sie zuerst einen API-Key für\n"
-                f"{PROVIDER_NAMES.get(provider, provider)} in den Einstellungen.",
+                "Kein Modell konfiguriert",
+                "Bitte konfigurieren Sie LM Studio URL und Modellname in den Einstellungen.\n"
+                "LM Studio muss laufen und ein Modell geladen sein.",
             )
             self.open_settings()
-            api_key = load_api_key(load_provider())
-            if not api_key:
+            base_url = load_lm_studio_url()
+            model = load_lm_studio_model()
+            if not model:
                 return
 
         # Show mode selection dialog
@@ -1365,7 +1444,7 @@ class MainWindow(QMainWindow):
 
         # Launch worker
         self.worker = AnonymizeWorker(
-            self.current_pdf, output_path, provider, api_key,
+            self.current_pdf, output_path, base_url, model,
             mode=mode, scope=scope,
         )
         self.worker.progress.connect(self.drop_zone.set_progress)
@@ -1374,8 +1453,14 @@ class MainWindow(QMainWindow):
         self.worker.entity_count.connect(self._on_entity_count)
         self.worker.finished_ok.connect(self.on_success)
         self.worker.finished_err.connect(self.on_error)
-        self.worker.finished.connect(self.worker.deleteLater)
+        self.worker.finished.connect(self._on_worker_finished)
         self.worker.start()
+
+    def _on_worker_finished(self):
+        """Clean up the worker reference after the thread finishes."""
+        if self.worker:
+            self.worker.deleteLater()
+            self.worker = None
 
     def _on_entity_count(self, count: int):
         self._entity_count = count
